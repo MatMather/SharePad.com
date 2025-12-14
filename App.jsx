@@ -196,7 +196,8 @@ function Room({ slug, onExit, user }) {
   const [text, setText] = useState('');
   const [images, setImages] = useState([]);
   const [status, setStatus] = useState('sincronizado');
-  const [uploading, setUploading] = useState(false);
+  const [uploading, setUploading] = useState(false); // Para imagens
+  const [fileUploading, setFileUploading] = useState(false); // Para arquivos genéricos
   const [showSidebar, setShowSidebar] = useState(false);
   const textareaRef = useRef(null);
   const [copied, setCopied] = useState(false);
@@ -457,6 +458,60 @@ function Room({ slug, onExit, user }) {
     }
   };
   
+  // 7. Upload de Arquivo Genérico
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
+    if (file.size > MAX_FILE_SIZE) {
+        setShowConfirmModal({
+            message: `O arquivo "${file.name}" é muito grande. O limite é de 5 MB.`,
+            onConfirm: () => setShowConfirmModal(null),
+            isError: true,
+        });
+        e.target.value = null;
+        return;
+    }
+
+    setFileUploading(true);
+    setStatus(`enviando arquivo: ${file.name}...`);
+    
+    try {
+      const fileBase64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (event) => resolve(event.target.result);
+        reader.onerror = (error) => reject(error);
+        reader.readAsDataURL(file);
+      });
+      
+      const newItem = {
+        name: file.name,
+        type: 'file', // Novo tipo
+        parent: currentFolderId, 
+        url: fileBase64, // Base64 data URL
+        mimeType: file.type,
+        createdAt: Date.now(),
+        createdBy: user.uid,
+      };
+      
+      await addDoc(roomFilesColRef, newItem);
+      setStatus('arquivo enviado e sincronizado');
+      
+    } catch (err) {
+      console.error("Erro upload de arquivo:", err);
+      setStatus('erro ao enviar arquivo');
+      setShowConfirmModal({
+            message: `Erro ao enviar o arquivo: ${err.message || 'Desconhecido'}`,
+            onConfirm: () => setShowConfirmModal(null),
+            isError: true,
+        });
+    } finally {
+      setFileUploading(false);
+      e.target.value = null;
+    }
+  };
+  
   // Handler para iniciar a exclusão de imagem
   const handleDeleteImageRequest = (imgObj) => {
     setShowConfirmModal({
@@ -521,6 +576,8 @@ function Room({ slug, onExit, user }) {
         onGoBack={goBack}
         onRename={handleRenameItemRequest}
         onDelete={handleDeleteItemRequest}
+        onFileUpload={handleFileUpload}
+        fileUploading={fileUploading}
     />
   );
 
@@ -683,7 +740,7 @@ function Room({ slug, onExit, user }) {
 }
 
 // --- Componente do Navegador de Arquivos ---
-function FileBrowser({ content, currentFolderId, currentFolderName, onNavigate, onOpenFile, onCreateItem, onGoBack, onRename, onDelete }) {
+function FileBrowser({ content, currentFolderId, currentFolderName, onNavigate, onOpenFile, onCreateItem, onGoBack, onRename, onDelete, onFileUpload, fileUploading }) {
     
     // Icone de três pontos para menu de contexto
     const ThreeDots = () => (
@@ -692,7 +749,7 @@ function FileBrowser({ content, currentFolderId, currentFolderName, onNavigate, 
         </svg>
     );
     
-    // Icones para Pasta e Documento (Usando SVGs para evitar dependências)
+    // Icones para Pasta, Documento e Arquivo
     const FolderIcon = (props) => (
         <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-yellow-500" viewBox="0 0 24 24" fill="currentColor" {...props}>
             <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
@@ -702,6 +759,12 @@ function FileBrowser({ content, currentFolderId, currentFolderName, onNavigate, 
     const DocumentIcon = (props) => (
         <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-blue-600" viewBox="0 0 24 24" fill="currentColor" {...props}>
             <path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.89 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zM6 20V4h7v4h4v12H6z"/>
+        </svg>
+    );
+    
+    const FileIcon = (props) => (
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-gray-500" viewBox="0 0 24 24" fill="currentColor" {...props}>
+            <path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.89 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zM6 20V4h7v5h5v11H6z"/>
         </svg>
     );
     
@@ -742,6 +805,14 @@ function FileBrowser({ content, currentFolderId, currentFolderName, onNavigate, 
         onDelete(contextMenu.itemId, contextMenu.itemName);
         closeContextMenu();
     };
+    
+    // Lógica para download de arquivo (tipo 'file')
+    const handleFileClick = (item) => {
+        const link = document.createElement('a');
+        link.href = item.url;
+        link.download = item.name;
+        link.click();
+    };
 
     return (
         <div className="h-full flex flex-col p-6 bg-gray-50">
@@ -749,7 +820,7 @@ function FileBrowser({ content, currentFolderId, currentFolderName, onNavigate, 
             <div className="flex items-center space-x-2 mb-4 p-3 bg-white border border-gray-200 rounded-xl shadow-md">
                 <button 
                     onClick={onGoBack} 
-                    disabled={!currentFolderId && !currentFolderName !== 'Raiz'} 
+                    disabled={!currentFolderId} // Corrigido para desabilitar apenas na Raiz
                     className="p-1 rounded-full hover:bg-gray-100 transition disabled:opacity-50"
                     title="Voltar"
                 >
@@ -763,7 +834,7 @@ function FileBrowser({ content, currentFolderId, currentFolderName, onNavigate, 
             </div>
 
             {/* Ações */}
-            <div className="flex space-x-3 mb-6 flex-shrink-0">
+            <div className="flex space-x-3 mb-6 flex-shrink-0 flex-wrap gap-y-3">
                 <button
                     onClick={() => onCreateItem('document')}
                     className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition shadow-lg shadow-blue-500/30"
@@ -778,6 +849,30 @@ function FileBrowser({ content, currentFolderId, currentFolderName, onNavigate, 
                     <FolderIcon className="w-4 h-4 text-yellow-600" />
                     Nova Pasta
                 </button>
+                
+                {/* NOVO: Botão de Upload de Arquivo */}
+                <label className={`
+                    flex items-center gap-1.5 px-4 py-2 text-sm rounded-xl transition cursor-pointer 
+                    ${fileUploading ? 'bg-gray-400 text-white cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-700 shadow-lg shadow-green-500/30'}
+                `}>
+                    {fileUploading ? (
+                        <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Enviando...
+                        </>
+                    ) : (
+                        <>
+                            <Upload className="w-4 h-4" />
+                            Carregar Arquivo
+                        </>
+                    )}
+                    <input 
+                        type="file" 
+                        className="hidden" 
+                        onChange={onFileUpload} 
+                        disabled={fileUploading}
+                    />
+                </label>
             </div>
 
             {/* Lista de Conteúdo */}
@@ -785,29 +880,41 @@ function FileBrowser({ content, currentFolderId, currentFolderName, onNavigate, 
                 {content.length === 0 ? (
                     <div className="text-center text-gray-400 py-10 border-2 border-dashed border-gray-200 rounded-xl bg-white/50 m-4">
                         <FolderIcon className="w-12 h-12 mx-auto mb-2 opacity-20" />
-                        <p className="text-sm">Esta pasta está vazia. Crie um novo documento ou pasta.</p>
+                        <p className="text-sm">Esta pasta está vazia. Crie um novo documento, pasta ou carregue um arquivo.</p>
                     </div>
                 ) : (
-                    content.map((item) => (
-                        <div
-                            key={item.id}
-                            className="flex items-center justify-between p-3 bg-white rounded-xl shadow-sm hover:bg-blue-50 hover:shadow-md transition cursor-pointer group"
-                            onClick={() => item.type === 'folder' ? onNavigate(item.id) : onOpenFile(item.id)}
-                            onContextMenu={(e) => handleContextMenu(e, item)}
-                        >
-                            <div className="flex items-center space-x-3 truncate">
-                                {item.type === 'folder' ? <FolderIcon /> : <DocumentIcon />}
-                                <span className="truncate text-base text-gray-800 font-medium">{item.name}</span>
-                            </div>
-                            <button
-                                onClick={(e) => { e.stopPropagation(); handleContextMenu(e, item); }}
-                                className="p-1 rounded-full text-gray-400 hover:bg-gray-200 hover:text-gray-700 opacity-0 group-hover:opacity-100 transition"
-                                title="Opções"
+                    content.map((item) => {
+                        const Icon = item.type === 'folder' 
+                            ? FolderIcon 
+                            : (item.type === 'document' ? DocumentIcon : FileIcon);
+                            
+                        const handleItemClick = item.type === 'folder' 
+                            ? () => onNavigate(item.id) 
+                            : (item.type === 'document' 
+                                ? () => onOpenFile(item.id) 
+                                : () => handleFileClick(item));
+
+                        return (
+                            <div
+                                key={item.id}
+                                className="flex items-center justify-between p-3 bg-white rounded-xl shadow-sm hover:bg-blue-50 hover:shadow-md transition cursor-pointer group"
+                                onClick={handleItemClick}
+                                onContextMenu={(e) => handleContextMenu(e, item)}
                             >
-                                <ThreeDots />
-                            </button>
-                        </div>
-                    ))
+                                <div className="flex items-center space-x-3 truncate">
+                                    <Icon />
+                                    <span className="truncate text-base text-gray-800 font-medium">{item.name}</span>
+                                </div>
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); handleContextMenu(e, item); }}
+                                    className="p-1 rounded-full text-gray-400 hover:bg-gray-200 hover:text-gray-700 opacity-0 group-hover:opacity-100 transition"
+                                    title="Opções"
+                                >
+                                    <ThreeDots />
+                                </button>
+                            </div>
+                        );
+                    })
                 )}
             </div>
             
